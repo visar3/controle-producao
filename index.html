@@ -1,1 +1,1361 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle de Produção - VISAR</title>
+    
+    <!-- Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
 
+    <!-- Configuração de Cores Tailwind -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: { brand: { 50:'var(--brand-50)',100:'var(--brand-100)',200:'var(--brand-200)',500:'var(--brand-500)',600:'var(--brand-600)',700:'var(--brand-700)' } }
+                }
+            }
+        }
+    </script>
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Firebase SDK Config e Conexão em Tempo Real -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAya8R_LV6ditA00SdMgWrfwcG0oxGhofM",
+            authDomain: "controle-de-producao-9715c.firebaseapp.com",
+            projectId: "controle-de-producao-9715c",
+            storageBucket: "controle-de-producao-9715c.firebasestorage.app",
+            messagingSenderId: "445011642702",
+            appId: "1:445011642702:web:72477f1facaa9a0808761f"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        let isRemoteUpdate = false;
+
+        // Função de salvamento forçado no Firestore
+        window.saveState = async function() {
+            if (isRemoteUpdate) return; // Evita loop de salvamento ao receber dados da nuvem
+
+            const payload = {
+                orders: window.appState.orders || [],
+                inventory: window.appState.inventory || [],
+                settings: window.appState.settings || {}
+            };
+
+            localStorage.setItem('pcp_industrial_data_clean', JSON.stringify(payload));
+
+            try {
+                await setDoc(doc(db, "pcp_visar", "dados_gerais"), payload);
+                console.log("Enviado para o Firebase com sucesso!");
+            } catch (error) {
+                console.error("Erro ao salvar no Firestore:", error);
+                alert("ERRO AO SALVAR NA NUVEM: " + error.message);
+            }
+        };
+
+        // Escuta em tempo real do Firestore
+        onSnapshot(doc(db, "pcp_visar", "dados_gerais"), (docSnap) => {
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                isRemoteUpdate = true;
+                window.appState.orders = data.orders || [];
+                window.appState.inventory = data.inventory || [];
+                if (data.settings) {
+                    Object.assign(window.appState.settings, data.settings);
+                }
+                localStorage.setItem('pcp_industrial_data_clean', JSON.stringify(data));
+                if (typeof window.applyVisualSettings === 'function') window.applyVisualSettings();
+                if (typeof window.renderKanban === 'function') window.renderKanban();
+                setTimeout(() => { isRemoteUpdate = false; }, 500);
+                console.log("Dados sincronizados em tempo real do Firebase!");
+            }
+        }, (error) => {
+            console.error("Erro ao escutar mudanças no Firestore:", error);
+        });
+    </script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f1f5f9;
+            margin: 0;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* --- MODO ADMINISTRADOR (CONTROLE DE ACESSO) --- */
+        body:not(.admin-mode) .admin-only { display: none !important; }
+        body:not(.admin-mode) .admin-disabled { pointer-events: none !important; opacity: 0.6; }
+
+        /* Dynamic Background Layer */
+        #app-background {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -2;
+            background-size: cover;
+            background-position: center;
+            background-color: #f1f5f9;
+        }
+        #app-blur-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -1;
+            background: rgba(255,255,255,0.1);
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.4); }
+
+        /* Clean Number Input */
+        .clean-partial-input {
+            -moz-appearance: textfield;
+            text-align: right;
+            width: 45px;
+            background: transparent;
+            border: 1px solid transparent;
+            border-bottom: 2px solid #cbd5e1;
+            font-weight: 700;
+            color: #0f172a;
+            padding: 0 4px;
+            border-radius: 2px;
+            transition: all 0.2s;
+            outline: none;
+        }
+        .clean-partial-input:focus {
+            border-bottom-color: #0ea5e9;
+            background: rgba(255,255,255,0.8);
+        }
+        .clean-partial-input::-webkit-outer-spin-button,
+        .clean-partial-input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        /* Frosted Glass Column */
+        .glass-col {
+            background: rgba(255, 255, 255, var(--glass-opacity, 0.85));
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.6);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+
+        /* Print Area */
+        #printableSheet { display: none; }
+        @media print {
+            body * { visibility: hidden; }
+            #app-container, .modal { display: none !important; }
+            #printableSheet, #printableSheet * { visibility: visible; }
+            #printableSheet {
+                display: block !important;
+                position: absolute; left: 0; top: 0; width: 100%;
+                margin: 0; padding: 0;
+                background: white; font-family: Arial, sans-serif;
+            }
+        }
+
+        /* ===== TEMAS E BADGES ===== */
+        :root{--brand-50:#f0f9ff;--brand-100:#e0f2fe;--brand-200:#bae6fd;--brand-500:#0ea5e9;--brand-600:#0284c7;--brand-700:#0369a1}
+        .bdg{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:700;border:1px solid}
+        .bdg-ok{background:#f1f5f9;color:#475569;border-color:#cbd5e1}
+        .bdg-soon{background:#fffbeb;color:#b45309;border-color:#fcd34d}
+        .bdg-late{background:#fef2f2;color:#b91c1c;border-color:#fca5a5}
+        .bdg-st{background:var(--brand-50);color:var(--brand-700);border-color:var(--brand-200)}
+        .sw{width:28px;height:28px;border-radius:9999px;border:2px solid transparent;cursor:pointer}
+        .sw.on{border-color:#fff;box-shadow:0 0 0 2px #0f172a}
+        .seg.on{background:var(--brand-600);color:#fff;border-color:transparent}
+        html.has-accent #logoBox{background:var(--brand-700)!important}
+        html.dark{color-scheme:dark}
+        html.dark body,html.dark #app-background{background-color:#0b1220}
+        html.dark .bg-white{background:#1e293b}
+        html.dark .bg-white\/90,html.dark .bg-white\/80{background:rgba(30,41,59,.9)}
+        html.dark .bg-white\/40{background:rgba(255,255,255,.05)}
+        html.dark .bg-slate-50{background:#172033}
+        html.dark .bg-slate-100{background:#0f172a}
+        html.dark .bg-slate-200,html.dark .bg-slate-200\/80,html.dark .bg-slate-800{background:#334155}
+        html.dark .text-slate-900,html.dark .text-slate-800{color:#f1f5f9}
+        html.dark .text-slate-700{color:#e2e8f0}
+        html.dark .text-slate-600{color:#cbd5e1}
+        html.dark .text-slate-500,html.dark .text-slate-400{color:#94a3b8}
+        html.dark .hover\:text-slate-800:hover,html.dark .hover\:text-slate-700:hover,html.dark .hover\:text-slate-600:hover{color:#fff}
+        html.dark .border-slate-100,html.dark .border-slate-200,html.dark .border-slate-300,html.dark .border-slate-200\/50{border-color:#334155}
+        html.dark .divide-slate-100>:not([hidden])~:not([hidden]){border-color:#334155}
+        html.dark .border-white\/50{border-color:rgba(255,255,255,.1)}
+        html.dark .hover\:bg-slate-50:hover,html.dark .hover\:bg-slate-100:hover,html.dark .hover\:bg-slate-200\/50:hover{background:#334155}
+        html.dark input[type=text],html.dark input[type=number],html.dark input[type=date],html.dark select{background:#0f172a;color:#f1f5f9;border-color:#475569}
+        html.dark input.clean-partial-input[type=number]{background:transparent;color:#f1f5f9}
+        html.dark .glass-col{background:rgba(15,23,42,var(--glass-opacity,.85));border-color:rgba(255,255,255,.08)}
+        html.dark .bg-amber-50,html.dark .bdg-soon{background:#3a2a0a;color:#fbbf24;border-color:#78560f}
+        html.dark .text-amber-700{color:#fbbf24}
+        html.dark .border-amber-200{border-color:#78560f}
+        html.dark .bg-emerald-50{background:#0b2a22}
+        html.dark .text-emerald-700{color:#6ee7b7}
+        html.dark .border-emerald-200{border-color:#14532d}
+        html.dark .bg-red-50,html.dark .bdg-late{background:#3b1212;color:#fca5a5;border-color:#7f1d1d}
+        html.dark .bg-purple-50{background:#2a1a45}
+        html.dark .text-purple-700{color:#d8b4fe}
+        html.dark .border-purple-200{border-color:#581c87}
+        html.dark .bdg-ok{background:#1e293b;color:#cbd5e1;border-color:#475569}
+        @media print{html.dark body{background:#fff}}
+    </style>
+</head>
+<body class="text-slate-800">
+
+    <!-- Background -->
+    <div id="app-background"></div>
+    <div id="app-blur-overlay"></div>
+
+    <!-- MAIN APP -->
+    <div id="app-container" class="flex flex-col h-full w-full p-2 sm:p-4 relative z-10 max-w-[1600px] mx-auto">
+        
+        <!-- Header -->
+        <header class="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 mb-4">
+            
+            <div class="flex items-center gap-3 bg-white/90 backdrop-blur shadow-sm px-4 py-2.5 rounded-xl border border-slate-200 w-full xl:w-auto">
+                <div id="logoBox" class="w-10 h-10 rounded-lg bg-slate-800 text-white flex items-center justify-center text-lg shadow">
+                    <i class="fas fa-industry"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold text-slate-900 leading-tight">Controle de Produção - VISAR</h1>
+                    <p class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">PEDIDOS E FABRICAÇÃO</p>
+                </div>
+            </div>
+
+            <!-- Global Actions & Search -->
+            <div class="flex flex-wrap items-center gap-2 w-full xl:w-auto">
+                <div class="relative flex-1 xl:w-64">
+                    <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 text-sm"></i>
+                    <input type="text" id="searchInput" placeholder="Pesquisar pedido ou peça..." oninput="renderKanban()"
+                           class="w-full pl-9 pr-3 py-2 rounded-lg text-sm border border-slate-300 bg-white/90 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 shadow-sm">
+                </div>
+
+                <button onclick="openInventoryModal()" class="bg-white/90 hover:bg-slate-50 text-slate-700 px-3 py-2 rounded-lg shadow-sm border border-slate-300 font-medium text-sm transition flex items-center gap-2">
+                    <i class="fas fa-boxes-stacked text-slate-500"></i> <span class="hidden sm:inline">Estoque</span>
+                </button>
+                <button onclick="openArchivedModal()" class="bg-white/90 hover:bg-slate-50 text-slate-700 px-3 py-2 rounded-lg shadow-sm border border-slate-300 font-medium text-sm transition flex items-center gap-2">
+                    <i class="fas fa-box-archive text-slate-500"></i> <span class="hidden sm:inline">Arquivos</span>
+                </button>
+                <button onclick="toggleTheme()" title="Modo claro / escuro" class="bg-white/90 hover:bg-slate-50 text-slate-700 px-3 py-2 rounded-lg shadow-sm border border-slate-300 text-sm transition flex items-center gap-2"><i id="themeIcon" class="fas fa-moon"></i></button>
+                <button onclick="openSettingsModal()" class="admin-only bg-slate-800 hover:bg-slate-700 text-white px-3 py-2 rounded-lg shadow-sm font-medium text-sm transition flex items-center gap-2">
+                    <i class="fas fa-sliders-h"></i>
+                </button>
+                
+                <!-- BOTÃO DE SENHA E STATUS -->
+                <div class="flex items-center gap-2 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-lg ml-auto xl:ml-0">
+                    <span id="user-status" class="text-xs font-bold text-slate-500"><i class="fas fa-eye"></i> Visualização</span>
+                    <button id="btn-login-admin" onclick="toggleAdmin()" class="bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 px-2 py-1 rounded text-[10px] uppercase font-bold shadow-sm transition">Admin</button>
+                </div>
+
+                <button onclick="openOrderModal()" class="admin-only bg-brand-600 hover:bg-brand-700 text-white px-4 py-2 rounded-lg shadow font-medium text-sm transition flex items-center gap-2">
+                    <i class="fas fa-plus"></i> Novo
+                </button>
+            </div>
+        </header>
+
+        <!-- Filters Row -->
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 mb-4">
+            
+            <!-- Type Tabs -->
+            <div class="flex bg-white/80 backdrop-blur rounded-lg p-1 shadow-sm border border-slate-200 overflow-x-auto w-full md:w-auto">
+                <button onclick="setTypeFilter('all')" id="tab-type-all" class="px-4 py-1.5 rounded-md text-sm font-bold shadow bg-white text-slate-800 flex-1 md:flex-none">Todos</button>
+                <button onclick="setTypeFilter('barracao')" id="tab-type-barracao" class="px-4 py-1.5 rounded-md text-sm font-medium text-slate-500 hover:text-slate-800 flex-1 md:flex-none transition">Barracão</button>
+                <button onclick="setTypeFilter('variado')" id="tab-type-variado" class="px-4 py-1.5 rounded-md text-sm font-medium text-slate-500 hover:text-slate-800 flex-1 md:flex-none transition">Variados</button>
+            </div>
+
+            <!-- Sector Filters -->
+            <div class="flex items-center gap-1 overflow-x-auto w-full md:w-auto">
+                <span class="text-xs font-bold text-slate-500 uppercase mr-2 hidden sm:block">Setor:</span>
+                <button onclick="setSectorFilter('all')" id="tab-sec-all" class="px-3 py-1.5 text-xs font-bold bg-slate-800 text-white rounded-lg shadow-sm">Todos</button>
+                <button onclick="setSectorFilter('corte')" id="tab-sec-corte" class="px-3 py-1.5 text-xs font-semibold bg-white/80 text-slate-600 border border-slate-200 hover:bg-slate-100 rounded-lg shadow-sm"><i class="fas fa-scissors mr-1 text-slate-400"></i> Corte</button>
+                <button onclick="setSectorFilter('dobra')" id="tab-sec-dobra" class="px-3 py-1.5 text-xs font-semibold bg-white/80 text-slate-600 border border-slate-200 hover:bg-slate-100 rounded-lg shadow-sm"><i class="fas fa-ruler-combined mr-1 text-slate-400"></i> Dobra</button>
+                <button onclick="setSectorFilter('montagem')" id="tab-sec-montagem" class="px-3 py-1.5 text-xs font-semibold bg-white/80 text-slate-600 border border-slate-200 hover:bg-slate-100 rounded-lg shadow-sm"><i class="fas fa-wrench mr-1 text-slate-400"></i> Montagem</button>
+                <button onclick="setSectorFilter('expedicao')" id="tab-sec-expedicao" class="px-3 py-1.5 text-xs font-semibold bg-white/80 text-slate-600 border border-slate-200 hover:bg-slate-100 rounded-lg shadow-sm"><i class="fas fa-box mr-1 text-slate-400"></i> Expedição</button>
+            </div>
+        </div>
+
+        <!-- Kanban Board -->
+        <main class="flex-1 overflow-x-auto overflow-y-hidden">
+            <div class="flex h-full gap-4 pb-2 w-max xl:w-full" id="kanban-board">
+                <!-- Injected via JS -->
+            </div>
+        </main>
+    </div>
+
+    <!-- MODAL: ORDER FORM (Create / Edit) -->
+    <div id="orderModal" class="fixed inset-0 bg-slate-900/60 z-50 hidden flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white w-full max-w-2xl rounded-xl shadow-2xl flex flex-col max-h-[90vh]">
+            <div class="px-5 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h2 id="orderModalTitle" class="text-lg font-bold text-slate-800"><i class="fas fa-file-invoice mr-2 text-brand-600"></i> Novo Pedido</h2>
+                <button onclick="closeOrderModal()" class="text-slate-400 hover:text-slate-700 text-xl"><i class="fas fa-times"></i></button>
+            </div>
+            
+            <div class="p-5 flex-1 overflow-y-auto space-y-4">
+                <input type="hidden" id="formOrderId">
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Cliente / Referência *</label>
+                        <input type="text" id="formClient" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Lote / Descrição</label>
+                        <input type="text" id="formTag" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-brand-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Tipo de Pedido</label>
+                        <select id="formType" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-brand-500 outline-none">
+                            <option value="barracao">Barracão</option>
+                            <option value="variado">Pedido Variado / Outro</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Setor Inicial</label>
+                        <select id="formSector" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-brand-500 outline-none">
+                            <option value="corte">Corte</option>
+                            <option value="dobra">Dobra</option>
+                            <option value="montagem">Montagem</option>
+                            <option value="expedicao">Expedição</option>
+                        </select>
+                    </div>
+                    <div><label class="block text-xs font-bold text-slate-600 uppercase mb-1">Prazo de Entrega</label><input type="date" id="formDeadline" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-brand-500 outline-none"></div>
+                    <div><label class="block text-xs font-bold text-slate-600 uppercase mb-1">Status</label>
+                        <select id="formStatus" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-brand-500 outline-none">
+                            <option value="fila">Fila de Pedidos</option>
+                            <option value="material">Aguard. Material</option>
+                            <option value="producao">Em Produção</option>
+                            <option value="pronto">Pronto / Expedição</option>
+                        </select></div>
+                    <div id="copiesRow" class="md:col-span-2 hidden"><label class="block text-xs font-bold text-slate-600 uppercase mb-1">Quantidade de cópias</label><input type="number" id="formCopies" min="1" max="50" value="1" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-brand-500 outline-none"></div>
+                    <div class="md:col-span-2">
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Observações (Opcional)</label>
+                        <input type="text" id="formNotes" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-brand-500 outline-none">
+                    </div>
+                </div>
+
+                <div class="border-t border-slate-200 pt-4 mt-2">
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="block text-xs font-bold text-slate-600 uppercase">Lista de Peças *</label>
+                        <button onclick="addFormItemRow()" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded font-semibold border border-slate-300 transition">
+                            <i class="fas fa-plus mr-1"></i> Add Linha
+                        </button>
+                    </div>
+                    <div id="formItemsContainer" class="space-y-2">
+                        <!-- Item rows injected here -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-5 py-4 border-t border-slate-200 bg-slate-50 rounded-b-xl flex justify-between items-center">
+                <button id="btnDeleteOrder" onclick="deleteCurrentOrder()" class="text-red-500 hover:text-red-700 hover:bg-red-50 px-3 py-2 rounded-lg text-sm font-semibold transition hidden">
+                    <i class="fas fa-trash-alt mr-1"></i> Excluir
+                </button>
+                <div class="flex gap-2 ml-auto">
+                    <button id="btnDuplicateOrder" onclick="duplicateOrder(document.getElementById('formOrderId').value)" class="px-4 py-2 rounded-lg text-slate-600 bg-white border border-slate-300 hover:bg-slate-50 text-sm font-semibold transition hidden"><i class="fas fa-copy mr-1"></i> Duplicar</button>
+                    <button onclick="closeOrderModal()" class="px-4 py-2 rounded-lg text-slate-600 bg-white border border-slate-300 hover:bg-slate-50 text-sm font-semibold transition">Cancelar</button>
+                    <button onclick="saveOrder()" class="px-4 py-2 rounded-lg text-white bg-brand-600 hover:bg-brand-700 text-sm font-bold shadow transition">Salvar Pedido</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: INVENTORY -->
+    <div id="inventoryModal" class="fixed inset-0 bg-slate-900/60 z-50 hidden flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white w-full max-w-2xl h-[80vh] rounded-xl shadow-2xl flex flex-col">
+            <div class="px-5 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h2 class="text-lg font-bold text-slate-800"><i class="fas fa-boxes-stacked mr-2 text-brand-600"></i> Estoque Atual</h2>
+                <button onclick="closeInventoryModal()" class="text-slate-400 hover:text-slate-700 text-xl"><i class="fas fa-times"></i></button>
+            </div>
+            
+            <div class="p-5 flex-1 overflow-hidden flex flex-col gap-4">
+                <div class="bg-slate-100 p-3 rounded-lg border border-slate-200 flex flex-wrap gap-2 items-end admin-only">
+                    <div class="flex-1 min-w-[150px]">
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Nova Peça</label>
+                        <input type="text" id="invNewName" placeholder="Nome..." class="w-full border border-slate-300 rounded px-3 py-1.5 text-sm outline-none focus:border-brand-500">
+                    </div>
+                    <div class="w-24">
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Qtd</label>
+                        <input type="number" id="invNewQty" placeholder="0" class="w-full border border-slate-300 rounded px-3 py-1.5 text-sm outline-none focus:border-brand-500 text-center">
+                    </div>
+                    <button onclick="addInventoryItem()" class="bg-slate-800 text-white px-3 py-1.5 rounded shadow-sm text-sm font-bold hover:bg-slate-700 transition h-[34px]">
+                        Add
+                    </button>
+                </div>
+
+                <div class="flex-1 overflow-y-auto border border-slate-200 rounded-lg bg-white">
+                    <table class="w-full text-left text-sm text-slate-700">
+                        <thead class="bg-slate-50 text-slate-600 sticky top-0 text-xs uppercase font-bold border-b border-slate-200">
+                            <tr>
+                                <th class="px-4 py-2">Peça</th>
+                                <th class="px-4 py-2 w-28 text-center">Saldo</th>
+                                <th class="px-4 py-2 w-16 text-center admin-only"><i class="fas fa-cog"></i></th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventoryListBody" class="divide-y divide-slate-100"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: SETTINGS -->
+    <div id="settingsModal" class="fixed inset-0 bg-slate-900/60 z-50 hidden flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white w-full max-w-sm rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div class="px-5 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                <h2 class="text-lg font-bold text-slate-800"><i class="fas fa-image mr-2 text-brand-600"></i> Fundo e Opacidade</h2>
+                <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-slate-700 text-xl"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="p-5 space-y-5 overflow-y-auto">
+                <div>
+                    <label class="block text-xs font-bold text-slate-600 uppercase mb-2">Tema</label>
+                    <div class="flex gap-2 mb-3">
+                        <button id="thLight" onclick="setTheme('light')" class="seg flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm font-semibold"><i class="fas fa-sun mr-1"></i> Claro</button>
+                        <button id="thDark" onclick="setTheme('dark')" class="seg flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm font-semibold"><i class="fas fa-moon mr-1"></i> Escuro</button>
+                    </div>
+                    <label class="block text-xs font-bold text-slate-600 uppercase mb-2">Cor do Tema</label>
+                    <div class="flex items-center gap-2 flex-wrap"><button class="sw" data-c="#0284c7" style="background:#0284c7" onclick="setAccent('#0284c7')"></button><button class="sw" data-c="#059669" style="background:#059669" onclick="setAccent('#059669')"></button><button class="sw" data-c="#d97706" style="background:#d97706" onclick="setAccent('#d97706')"></button><button class="sw" data-c="#dc2626" style="background:#dc2626" onclick="setAccent('#dc2626')"></button><button class="sw" data-c="#7c3aed" style="background:#7c3aed" onclick="setAccent('#7c3aed')"></button><button class="sw" data-c="#475569" style="background:#475569" onclick="setAccent('#475569')"></button>
+                        <input type="color" id="accentPicker" oninput="setAccent(this.value)" class="w-8 h-8 p-0 border-0 bg-transparent cursor-pointer" title="Escolher outra cor">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-600 uppercase mb-2">Upload de Imagem</label>
+                    <label class="flex flex-col items-center justify-center w-full h-24 border-2 border-slate-300 border-dashed rounded-lg cursor-pointer bg-slate-50 hover:bg-slate-100 transition">
+                        <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                            <i class="fas fa-upload text-xl text-slate-400 mb-1"></i>
+                            <p class="text-xs text-slate-500 font-semibold">Selecionar do dispositivo</p>
+                        </div>
+                        <input id="bgImageInput" type="file" accept="image/*" class="hidden" onchange="handleImageUpload(event)"/>
+                    </label>
+                    <div class="mt-1 text-right">
+                        <button onclick="clearBackground()" class="text-[10px] text-red-500 hover:underline font-bold uppercase">Remover Fundo</button>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-600 uppercase mb-1 flex justify-between">
+                        <span>Desfoque (Blur)</span> <span id="blurValueLabel" class="text-brand-600">0px</span>
+                    </label>
+                    <input type="range" id="blurSlider" min="0" max="20" value="0" class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer" oninput="updateSettingsUI()">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-600 uppercase mb-1 flex justify-between">
+                        <span>Transparência Vidro</span> <span id="opacityValueLabel" class="text-brand-600">85%</span>
+                    </label>
+                    <input type="range" id="opacitySlider" min="40" max="100" value="85" class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer" oninput="updateSettingsUI()">
+                </div>
+            </div>
+            <div class="px-5 py-3 border-t border-slate-200 bg-slate-50 flex justify-end">
+                <button onclick="saveSettings()" class="px-4 py-2 rounded-lg text-white bg-slate-800 hover:bg-slate-900 text-sm font-bold shadow transition">Concluir</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: ARCHIVED -->
+    <div id="archivedModal" class="fixed inset-0 bg-slate-900/60 z-50 hidden flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white w-full max-w-2xl rounded-xl shadow-2xl flex flex-col max-h-[80vh]">
+            <div class="px-5 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h2 class="text-lg font-bold text-slate-800"><i class="fas fa-box-archive mr-2 text-slate-500"></i> Pedidos Arquivados</h2>
+                <button onclick="closeArchivedModal()" class="text-slate-400 hover:text-slate-700 text-xl"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="p-4 flex-1 overflow-y-auto space-y-2 bg-slate-100" id="archivedListContainer"></div>
+        </div>
+    </div>
+
+    <!-- TOASTS -->
+    <div id="toastContainer" class="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none"></div>
+
+    <!-- PRINTABLE SHEET (HIDDEN IN UI) -->
+    <div id="printableSheet"></div>
+
+    <!-- JAVASCRIPT APPLICATION LOGIC -->
+    <script>
+        // --- CONSTANTS & STRUCTURES ---
+        const COLUMNS = [
+            { id: 'fila', title: 'Fila de Pedidos', icon: 'fa-inbox', bgTag: 'bg-slate-500' },
+            { id: 'material', title: 'Aguard. Material', icon: 'fa-triangle-exclamation', bgTag: 'bg-amber-500' },
+            { id: 'producao', title: 'Em Produção', icon: 'fa-gears', bgTag: 'bg-brand-500' },
+            { id: 'pronto', title: 'Pronto / Expedição', icon: 'fa-check-circle', bgTag: 'bg-emerald-500' }
+        ];
+
+        const SECTORS = [
+            { id: 'corte', label: 'Corte', icon: 'fa-scissors' },
+            { id: 'dobra', label: 'Dobra', icon: 'fa-ruler-combined' },
+            { id: 'montagem', label: 'Montagem', icon: 'fa-wrench' },
+            { id: 'expedicao', label: 'Exped.', icon: 'fa-box' }
+        ];
+
+        // Global State
+        window.appState = {
+            orders: [],
+            inventory: [],
+            settings: { bgImage: '', blur: 0, opacity: 85, theme: 'light', accent: '#0284c7' },
+            filters: { type: 'all', sector: 'all', search: '' }
+        };
+
+        // --- SISTEMA DE SENHA / ADMIN ---
+        let isAdmin = false;
+        window.toggleAdmin = function() {
+            if (!isAdmin) {
+                const pass = prompt("Digite a senha de administrador:");
+                if (pass === "producao") {
+                    isAdmin = true;
+                    document.body.classList.add('admin-mode');
+                    document.getElementById('user-status').innerHTML = '<i class="fas fa-unlock text-emerald-600"></i> <span class="text-emerald-700">Edição Ativa</span>';
+                    document.getElementById('btn-login-admin').innerText = 'Sair';
+                    showToast("Modo de edição liberado!", "success");
+                } else if (pass !== null) {
+                    showToast("Senha incorreta!", "warning");
+                }
+            } else {
+                isAdmin = false;
+                document.body.classList.remove('admin-mode');
+                document.getElementById('user-status').innerHTML = '<i class="fas fa-eye"></i> Visualização';
+                document.getElementById('btn-login-admin').innerText = 'Admin';
+                showToast("Painel bloqueado para visualização.", "info");
+            }
+        };
+
+        // --- INITIALIZATION ---
+        window.onload = function() {
+            loadState();
+            applyVisualSettings();
+            renderKanban();
+        };
+
+        function loadState() {
+            try {
+                const stored = localStorage.getItem('pcp_industrial_data_clean');
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    window.appState.orders = parsed.orders || [];
+                    window.appState.inventory = parsed.inventory || [];
+                    Object.assign(window.appState.settings, parsed.settings || {});
+                }
+            } catch(e) {
+                console.error("Storage load error", e);
+            }
+        }
+
+        // --- FILTERING & TABS ---
+        window.setTypeFilter = function(type) {
+            window.appState.filters.type = type;
+            ['all', 'barracao', 'variado'].forEach(t => {
+                const btn = document.getElementById(`tab-type-${t}`);
+                if (!btn) return;
+                if (t === type) btn.className = "px-4 py-1.5 rounded-md text-sm font-bold shadow bg-white text-slate-800 flex-1 md:flex-none transition";
+                else btn.className = "px-4 py-1.5 rounded-md text-sm font-medium text-slate-500 hover:text-slate-800 flex-1 md:flex-none transition";
+            });
+            renderKanban();
+        };
+
+        window.setSectorFilter = function(sector) {
+            window.appState.filters.sector = sector;
+            ['all', 'corte', 'dobra', 'montagem', 'expedicao'].forEach(s => {
+                const btn = document.getElementById(`tab-sec-${s}`);
+                if (!btn) return;
+                if (s === sector) btn.className = "px-3 py-1.5 text-xs font-bold bg-slate-800 text-white rounded-lg shadow-sm transition";
+                else btn.className = "px-3 py-1.5 text-xs font-semibold bg-white/80 text-slate-600 border border-slate-200 hover:bg-slate-100 rounded-lg shadow-sm transition";
+            });
+            renderKanban();
+        };
+
+        // --- RENDER KANBAN BOARD (COM PRESERVAÇÃO DE ROLAGEM E FOCO) ---
+        window.renderKanban = function() {
+            // 1. Memoriza foco e rolagem atuais antes do re-render
+            const activeElId = document.activeElement ? document.activeElement.id : null;
+            const activeSelStart = (document.activeElement && 'selectionStart' in document.activeElement) ? document.activeElement.selectionStart : null;
+            
+            const windowY = window.scrollY;
+            const boardScrollLeft = document.getElementById('kanban-board')?.parentElement?.scrollLeft || 0;
+            
+            const colScrolls = {};
+            document.querySelectorAll('#kanban-board > div').forEach((col, idx) => {
+                const body = col.querySelector('.overflow-y-auto');
+                if (body) colScrolls[idx] = body.scrollTop;
+            });
+
+            const searchVal = (document.getElementById('searchInput').value || '').toLowerCase();
+            window.appState.filters.search = searchVal;
+
+            const board = document.getElementById('kanban-board');
+            board.innerHTML = '';
+
+            const rootStyle = document.documentElement.style;
+            rootStyle.setProperty('--glass-opacity', (window.appState.settings.opacity / 100));
+
+            COLUMNS.forEach((col, cIndex) => {
+                const colOrders = window.appState.orders.filter(o => {
+                    if (o.archived) return false;
+                    if (o.status !== col.id) return false;
+                    if (window.appState.filters.type !== 'all' && o.type !== window.appState.filters.type) return false;
+                    if (window.appState.filters.sector !== 'all' && o.sector !== window.appState.filters.sector) return false;
+                    
+                    if (searchVal) {
+                        const mClient = o.client.toLowerCase().includes(searchVal);
+                        const mTag = o.tag.toLowerCase().includes(searchVal);
+                        const mItem = o.items.some(i => i.name.toLowerCase().includes(searchVal));
+                        if (!mClient && !mTag && !mItem) return false;
+                    }
+                    return true;
+                });
+
+                colOrders.sort(byDeadline);
+
+                const colEl = document.createElement('div');
+                colEl.className = "flex-1 min-w-[320px] max-w-[400px] flex flex-col glass-col rounded-xl overflow-hidden h-full";
+
+                colEl.innerHTML = `
+                    <div class="px-4 py-3 border-b border-white/50 flex justify-between items-center bg-white/40">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full ${col.bgTag}"></span>
+                            <h2 class="font-bold text-slate-800 uppercase text-xs tracking-wider">${col.title}</h2>
+                        </div>
+                        <span class="bg-slate-200/80 text-slate-700 text-xs font-bold px-2 py-0.5 rounded-md">${colOrders.length}</span>
+                    </div>
+                `;
+
+                const bodyEl = document.createElement('div');
+                bodyEl.className = "flex-1 p-3 overflow-y-auto space-y-3";
+
+                colOrders.forEach(order => {
+                    bodyEl.appendChild(createOrderCard(order, cIndex));
+                });
+
+                colEl.appendChild(bodyEl);
+                board.appendChild(colEl);
+            });
+
+            // 2. Restaura posições de rolagem
+            document.querySelectorAll('#kanban-board > div').forEach((col, idx) => {
+                const body = col.querySelector('.overflow-y-auto');
+                if (body && colScrolls[idx] !== undefined) {
+                    body.scrollTop = colScrolls[idx];
+                }
+            });
+
+            if (document.getElementById('kanban-board')?.parentElement) {
+                document.getElementById('kanban-board').parentElement.scrollLeft = boardScrollLeft;
+            }
+            window.scrollTo(0, windowY);
+
+            // 3. Restaura o foco do cursor se aplicável
+            if (activeElId) {
+                const el = document.getElementById(activeElId);
+                if (el) {
+                    el.focus();
+                    if (activeSelStart !== null && 'setSelectionRange' in el) {
+                        try { el.setSelectionRange(activeSelStart, activeSelStart); } catch(e){}
+                    }
+                }
+            }
+        };
+
+        function createOrderCard(order, cIndex) {
+            const card = document.createElement('div');
+            card.id = `card_${order.id}`;
+            const borderClass = order.status === 'material' ? 'border-amber-400 border-2 shadow-amber-500/20' : 'border-slate-200 border shadow-sm';
+            
+            card.className = `bg-white rounded-xl p-3.5 flex flex-col gap-3 hover:shadow-md transition ${borderClass}`;
+
+            let totalPieces = 0; let donePieces = 0;
+            order.items.forEach(i => { totalPieces += i.total; donePieces += i.done; });
+            const progressPct = totalPieces === 0 ? 0 : Math.round((donePieces / totalPieces) * 100);
+            
+            const typeBadge = order.type === 'barracao' 
+                ? '<span class="px-1.5 py-0.5 bg-brand-50 text-brand-700 border border-brand-200 rounded text-[9px] font-bold uppercase tracking-wider">Barracão</span>'
+                : '<span class="px-1.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded text-[9px] font-bold uppercase tracking-wider">Variado</span>';
+
+            let html = `
+                <div class="flex justify-between items-start gap-2">
+                    <div class="min-w-0 flex-1 cursor-pointer">
+                        <div class="flex items-center gap-2 mb-1 flex-wrap">
+                            <h3 class="font-bold text-slate-900 text-sm truncate tracking-tight uppercase">${escapeHtml(order.client)}</h3>
+                            ${typeBadge}
+                        </div>
+                        <p class="text-[11px] font-semibold text-slate-500 truncate">${escapeHtml(order.tag)}</p>
+                    </div>
+                    <div class="flex gap-1 shrink-0 admin-only">
+                        <button onclick="printOrder('${order.id}')" title="Imprimir" class="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded transition"><i class="fas fa-print text-xs"></i></button>
+                        <button onclick="duplicateOrder('${order.id}')" title="Duplicar" class="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded transition"><i class="fas fa-copy text-xs"></i></button>
+                        <button onclick="openOrderModal('${order.id}')" title="Editar" class="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-brand-600 hover:bg-brand-50 rounded transition"><i class="fas fa-pen text-xs"></i></button>
+                    </div>
+                </div>
+            `;
+
+            html += `<div class="flex flex-wrap gap-1.5 items-center">${deadlineBadge(order)}</div>`;
+
+            if (order.notes) {
+                html += `<div class="bg-amber-50 text-amber-700 text-[10px] px-2 py-1 rounded border border-amber-200 truncate"><i class="fas fa-info-circle mr-1"></i>${escapeHtml(order.notes)}</div>`;
+            }
+
+            html += `<div class="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200 admin-disabled">`;
+            SECTORS.forEach(sec => {
+                const isActive = order.sector === sec.id;
+                const activeClasses = isActive ? 'bg-white shadow-sm text-brand-600 font-bold border border-slate-200/50' : 'text-slate-400 hover:text-slate-600 font-medium hover:bg-slate-200/50 border border-transparent';
+                html += `
+                    <button onclick="changeOrderSector('${order.id}', '${sec.id}')" class="flex-1 text-[9px] py-1.5 rounded-md uppercase tracking-wider transition ${activeClasses}">
+                        <i class="fas ${sec.icon} block text-[13px] mb-1 opacity-80"></i>${sec.label}
+                    </button>
+                `;
+            });
+            html += `</div>`;
+
+            // Clean Partial Items List com IDs Únicos para Foco Continuo
+            html += `<div class="space-y-1.5 mt-1 bg-slate-50 border border-slate-100 rounded-lg p-2">`;
+            order.items.forEach((item, iIdx) => {
+                const isComplete = item.done >= item.total;
+                const inputId = `input_part_${order.id}_${iIdx}`;
+                html += `
+                    <div class="flex items-center justify-between text-[11px]">
+                        <div class="flex items-center gap-1.5 flex-1 min-w-0 pr-2">
+                            <i class="fas ${isComplete ? 'fa-check-circle text-emerald-500' : 'fa-circle text-slate-300'} text-xs shrink-0"></i>
+                            <span class="font-semibold ${isComplete ? 'text-slate-400 line-through' : 'text-slate-700'} truncate">${escapeHtml(item.name)}</span>
+                        </div>
+                        <div class="flex items-center gap-1 shrink-0 bg-white border border-slate-200 rounded px-1 shadow-sm">
+                            <input type="number" id="${inputId}" min="0" max="${item.total}" value="${item.done}" 
+                                   class="clean-partial-input text-[11px] admin-disabled"
+                                   onchange="updatePartialItem('${order.id}', ${iIdx}, this.value)">
+                            <span class="text-slate-400 font-medium text-[10px] mr-1">/ ${item.total}</span>
+                        </div>
+                    </div>
+                `;
+            });
+            html += `</div>`;
+
+            let pColor = progressPct === 100 ? 'bg-emerald-500' : 'bg-brand-500';
+            html += `
+                <div class="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden mt-1">
+                    <div class="${pColor} h-full transition-all duration-300" style="width: ${progressPct}%"></div>
+                </div>
+            `;
+
+            const isFirst = cIndex === 0;
+            const isLast = cIndex === COLUMNS.length - 1;
+
+            html += `
+                <div class="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 gap-1.5 admin-only">
+                    <button onclick="moveOrder('${order.id}', -1)" class="flex-1 py-1.5 text-[10px] font-bold text-slate-500 border border-slate-200 hover:bg-slate-100 rounded-md transition ${isFirst ? 'opacity-30 pointer-events-none' : ''}">
+                        <i class="fas fa-chevron-left"></i> Voltar
+                    </button>
+
+                    <button onclick="deductFromInventory('${order.id}')" class="flex-1 py-1.5 text-[10px] font-bold text-brand-600 border border-brand-200 bg-brand-50 hover:bg-brand-100 rounded-md transition flex justify-center items-center gap-1" title="Abater estoque disponível">
+                        <i class="fas fa-box-open"></i> Estoque
+                    </button>
+
+                    ${isLast ? `
+                        <button onclick="archiveOrder('${order.id}')" class="flex-1 py-1.5 text-[10px] font-bold text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 rounded-md transition flex justify-center items-center gap-1 shadow-sm">
+                            <i class="fas fa-archive"></i> Arquivar
+                        </button>
+                    ` : `
+                        <button onclick="moveOrder('${order.id}', 1)" class="flex-1 py-1.5 text-[10px] font-bold text-slate-700 border border-slate-200 hover:bg-slate-100 rounded-md transition">
+                            Avançar <i class="fas fa-chevron-right"></i>
+                        </button>
+                    `}
+                </div>
+            `;
+
+            card.innerHTML = html;
+            return card;
+        }
+
+        // --- ORDER ACTIONS (ATUALIZAÇÃO LOCAL SEM PULAR TELA) ---
+        window.changeOrderSector = function(oId, sec) {
+            const order = window.appState.orders.find(o => o.id === oId);
+            if (order) { order.sector = sec; if(typeof window.saveState === 'function') window.saveState(); renderKanban(); }
+        };
+
+        window.updatePartialItem = function(oId, itemIdx, valStr) {
+            const order = window.appState.orders.find(o => o.id === oId);
+            if (order && order.items[itemIdx]) {
+                let val = parseInt(valStr) || 0;
+                if (val < 0) val = 0;
+                if (val > order.items[itemIdx].total) val = order.items[itemIdx].total;
+                order.items[itemIdx].done = val;
+                
+                // Atualização visual local instantânea sem destruir o DOM ou saltar a página
+                const card = document.getElementById(`card_${oId}`);
+                if (card) {
+                    const itemRows = card.querySelectorAll('.space-y-1\\.5 > div');
+                    if (itemRows && itemRows[itemIdx]) {
+                        const isComplete = val >= order.items[itemIdx].total;
+                        const icon = itemRows[itemIdx].querySelector('i');
+                        const text = itemRows[itemIdx].querySelector('span');
+                        if (icon) icon.className = `fas ${isComplete ? 'fa-check-circle text-emerald-500' : 'fa-circle text-slate-300'} text-xs shrink-0`;
+                        if (text) text.className = `font-semibold ${isComplete ? 'text-slate-400 line-through' : 'text-slate-700'} truncate`;
+                    }
+                    let totalPieces = 0; let donePieces = 0;
+                    order.items.forEach(i => { totalPieces += i.total; donePieces += i.done; });
+                    const progressPct = totalPieces === 0 ? 0 : Math.round((donePieces / totalPieces) * 100);
+                    const progressBar = card.querySelector('.w-full.bg-slate-200 > div');
+                    if (progressBar) {
+                        progressBar.style.width = `${progressPct}%`;
+                        progressBar.className = `${progressPct === 100 ? 'bg-emerald-500' : 'bg-brand-500'} h-full transition-all duration-300`;
+                    }
+                } else {
+                    renderKanban();
+                }
+
+                if(typeof window.saveState === 'function') window.saveState();
+            }
+        };
+
+        window.moveOrder = function(oId, offset) {
+            const order = window.appState.orders.find(o => o.id === oId);
+            if (order) {
+                const cIdx = COLUMNS.findIndex(c => c.id === order.status);
+                const nIdx = cIdx + offset;
+                if (nIdx >= 0 && nIdx < COLUMNS.length) {
+                    order.status = COLUMNS[nIdx].id;
+                    if(typeof window.saveState === 'function') window.saveState();
+                    renderKanban();
+                }
+            }
+        };
+
+        window.archiveOrder = function(oId) {
+            const order = window.appState.orders.find(o => o.id === oId);
+            if (order) {
+                order.archived = true;
+                if(typeof window.saveState === 'function') window.saveState();
+                renderKanban();
+                showToast("Pedido arquivado com sucesso.", "success");
+            }
+        };
+
+        // --- ABATER DO ESTOQUE ---
+        window.deductFromInventory = function(oId) {
+            const order = window.appState.orders.find(o => o.id === oId);
+            if (!order) return;
+
+            let updates = 0;
+            order.items.forEach(item => {
+                const needed = item.total - item.done;
+                if (needed > 0) {
+                    const invItem = window.appState.inventory.find(inv => inv.name.toLowerCase() === item.name.toLowerCase());
+                    if (invItem && invItem.qty > 0) {
+                        const amount = Math.min(needed, invItem.qty);
+                        invItem.qty -= amount;
+                        item.done += amount;
+                        updates++;
+                    }
+                }
+            });
+
+            if (updates > 0) {
+                if(typeof window.saveState === 'function') window.saveState();
+                renderKanban();
+                showToast("Peças deduzidas do estoque com sucesso!", "success");
+            } else {
+                showToast("Nenhuma peça pendente encontrada com saldo no estoque.", "warning");
+            }
+        };
+
+        // --- ORDER MODAL (CRUD) ---
+        window.openOrderModal = function(oId = null) {
+            const modal = document.getElementById('orderModal');
+            const title = document.getElementById('orderModalTitle');
+            const btnDel = document.getElementById('btnDeleteOrder');
+            const container = document.getElementById('formItemsContainer');
+            container.innerHTML = '';
+
+            if (oId) {
+                const order = window.appState.orders.find(o => o.id === oId);
+                if(!order) return;
+                title.innerHTML = '<i class="fas fa-pen mr-2 text-brand-600"></i> Editar Pedido';
+                btnDel.classList.remove('hidden');
+                
+                document.getElementById('formOrderId').value = order.id;
+                document.getElementById('formClient').value = order.client;
+                document.getElementById('formTag').value = order.tag;
+                document.getElementById('formType').value = order.type || 'barracao';
+                document.getElementById('formSector').value = order.sector || 'corte';
+                document.getElementById('formNotes').value = order.notes || '';
+                document.getElementById('formDeadline').value = order.deadline || '';
+                document.getElementById('formStatus').value = order.status || 'fila';
+                document.getElementById('copiesRow').classList.add('hidden');
+                document.getElementById('btnDuplicateOrder').classList.remove('hidden');
+
+                order.items.forEach(i => appendItemRow(i.name, i.total, i.done));
+            } else {
+                title.innerHTML = '<i class="fas fa-plus mr-2 text-brand-600"></i> Novo Pedido';
+                btnDel.classList.add('hidden');
+                
+                document.getElementById('formOrderId').value = '';
+                document.getElementById('formClient').value = '';
+                document.getElementById('formTag').value = '';
+                document.getElementById('formType').value = 'barracao';
+                document.getElementById('formSector').value = 'corte';
+                document.getElementById('formNotes').value = '';
+                document.getElementById('formDeadline').value = '';
+                document.getElementById('formStatus').value = 'fila';
+                document.getElementById('copiesRow').classList.add('hidden');
+                document.getElementById('btnDuplicateOrder').classList.add('hidden');
+
+                appendItemRow('', '', 0);
+            }
+
+            modal.classList.remove('hidden');
+        };
+
+        window.closeOrderModal = function() {
+            document.getElementById('orderModal').classList.add('hidden');
+        };
+
+        window.appendItemRow = function(name = '', total = '', done = 0) {
+            const container = document.getElementById('formItemsContainer');
+            const rowId = 'row_' + Date.now() + Math.random();
+            const div = document.createElement('div');
+            div.id = rowId;
+            div.className = "flex gap-2 items-center";
+            div.innerHTML = `
+                <input type="text" placeholder="Nome da Peça" value="${escapeHtml(name)}" class="form-item-name flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm outline-none focus:border-brand-500">
+                <input type="number" min="1" placeholder="Total" value="${total}" class="form-item-total w-20 border border-slate-300 rounded px-2 py-1.5 text-sm outline-none focus:border-brand-500 text-center">
+                <input type="hidden" value="${done}" class="form-item-done">
+                <button onclick="document.getElementById('${rowId}').remove()" class="text-red-400 hover:text-red-600 px-2 py-1"><i class="fas fa-trash"></i></button>
+            `;
+            container.appendChild(div);
+        };
+
+        window.addFormItemRow = function() {
+            appendItemRow();
+        };
+
+        window.saveOrder = function() {
+            const id = document.getElementById('formOrderId').value;
+            const client = document.getElementById('formClient').value.trim();
+            const tag = document.getElementById('formTag').value.trim();
+            const type = document.getElementById('formType').value;
+            const sector = document.getElementById('formSector').value;
+            const notes = document.getElementById('formNotes').value.trim();
+            const deadline = document.getElementById('formDeadline').value;
+            const status = document.getElementById('formStatus').value;
+
+            if (!client) return showToast("Nome do cliente é obrigatório.", "warning");
+
+            const itemRows = document.querySelectorAll('#formItemsContainer > div');
+            const items = [];
+            itemRows.forEach(row => {
+                const n = row.querySelector('.form-item-name').value.trim();
+                const t = parseInt(row.querySelector('.form-item-total').value) || 0;
+                const d = parseInt(row.querySelector('.form-item-done').value) || 0;
+                if (n && t > 0) items.push({ id: 'i_'+Math.random(), name: n, total: t, done: d });
+            });
+
+            if (items.length === 0) return showToast("Adicione pelo menos uma peça com quantidade válida.", "warning");
+
+            if (id) {
+                const order = window.appState.orders.find(o => o.id === id);
+                if(order) {
+                    order.client = client; order.tag = tag; order.type = type; 
+                    order.sector = sector; order.notes = notes; order.items = items;
+                    order.deadline = deadline; order.status = status;
+                }
+                showToast("Pedido atualizado com sucesso.", "success");
+            } else {
+                const copies = Math.max(1, Math.min(50, parseInt(document.getElementById('formCopies').value) || 1));
+                for (let n = 1; n <= copies; n++) {
+                    window.appState.orders.push({
+                        id: 'ord_' + Date.now() + '_' + n,
+                        client, type, sector, notes, deadline,
+                        tag: copies > 1 ? ((tag ? tag + ' ' : '') + '(' + n + '/' + copies + ')') : tag,
+                        status, archived: false,
+                        items: items.map(i => ({ ...i, id: 'i_' + Math.random() }))
+                    });
+                }
+                showToast(copies > 1 ? copies + " pedidos criados." : "Novo pedido criado.", "success");
+            }
+
+            if(typeof window.saveState === 'function') window.saveState();
+            renderKanban();
+            closeOrderModal();
+        };
+
+        window.deleteCurrentOrder = function() {
+            const id = document.getElementById('formOrderId').value;
+            if (id && confirm("Tem certeza que deseja excluir este pedido definitivamente?")) {
+                window.appState.orders = window.appState.orders.filter(o => o.id !== id);
+                if(typeof window.saveState === 'function') window.saveState();
+                renderKanban();
+                closeOrderModal();
+                showToast("Pedido excluído.", "info");
+            }
+        };
+
+        // --- INVENTORY MODAL ---
+        window.openInventoryModal = function() {
+            renderInventoryTable();
+            document.getElementById('inventoryModal').classList.remove('hidden');
+        };
+
+        window.closeInventoryModal = function() {
+            document.getElementById('inventoryModal').classList.add('hidden');
+        };
+
+        window.renderInventoryTable = function() {
+            const tbody = document.getElementById('inventoryListBody');
+            tbody.innerHTML = '';
+            
+            if (window.appState.inventory.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="3" class="text-center py-6 text-slate-400 text-sm">Estoque vazio.</td></tr>`;
+                return;
+            }
+
+            const sorted = [...window.appState.inventory].sort((a,b) => a.name.localeCompare(b.name));
+
+            sorted.forEach(item => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 transition";
+                tr.innerHTML = `
+                    <td class="px-4 py-2 font-bold text-slate-800">${escapeHtml(item.name)}</td>
+                    <td class="px-4 py-2 text-center">
+                        <input type="number" min="0" value="${item.qty}" class="w-16 border border-slate-300 rounded px-1 py-1 text-center text-sm outline-none focus:border-brand-500 font-semibold text-slate-700 admin-disabled" onchange="updateInvQty('${item.id}', this.value)">
+                    </td>
+                    <td class="px-4 py-2 text-center admin-only">
+                        <button onclick="deleteInvItem('${item.id}')" class="text-red-400 hover:text-red-600 bg-red-50 hover:bg-red-100 rounded px-2 py-1 transition"><i class="fas fa-trash-alt text-xs"></i></button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        };
+
+        window.addInventoryItem = function() {
+            const name = document.getElementById('invNewName').value.trim();
+            const qty = parseInt(document.getElementById('invNewQty').value) || 0;
+            
+            if (!name) return showToast("Digite o nome da peça.", "warning");
+
+            const existing = window.appState.inventory.find(i => i.name.toLowerCase() === name.toLowerCase());
+            if (existing) {
+                existing.qty += qty;
+                showToast("Quantidade somada ao item existente.", "info");
+            } else {
+                window.appState.inventory.push({ id: 'inv_' + Date.now(), name, qty });
+                showToast("Item adicionado ao estoque.", "success");
+            }
+
+            document.getElementById('invNewName').value = '';
+            document.getElementById('invNewQty').value = '';
+            if(typeof window.saveState === 'function') window.saveState();
+            renderInventoryTable();
+        };
+
+        window.updateInvQty = function(id, valStr) {
+            const item = window.appState.inventory.find(i => i.id === id);
+            if (item) {
+                item.qty = parseInt(valStr) || 0;
+                if(typeof window.saveState === 'function') window.saveState();
+            }
+        };
+
+        window.deleteInvItem = function(id) {
+            if(confirm("Remover este item do estoque?")) {
+                window.appState.inventory = window.appState.inventory.filter(i => i.id !== id);
+                if(typeof window.saveState === 'function') window.saveState();
+                renderInventoryTable();
+            }
+        };
+
+        // --- SETTINGS MODAL ---
+        window.openSettingsModal = function() {
+            document.getElementById('blurSlider').value = window.appState.settings.blur;
+            document.getElementById('opacitySlider').value = window.appState.settings.opacity;
+            updateSettingsUI();
+            document.getElementById('settingsModal').classList.remove('hidden');
+        };
+        window.closeSettingsModal = function() {
+            document.getElementById('settingsModal').classList.add('hidden');
+            applyVisualSettings();
+        };
+
+        window.updateSettingsUI = function() {
+            const blur = document.getElementById('blurSlider').value;
+            const opac = document.getElementById('opacitySlider').value;
+            document.getElementById('blurValueLabel').innerText = blur + "px";
+            document.getElementById('opacityValueLabel').innerText = opac + "%";
+        };
+
+        window.handleImageUpload = function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                window.appState.settings.bgImage = evt.target.result;
+                showToast("Imagem preparada. Salve para aplicar.", "info");
+            };
+            reader.readAsDataURL(file);
+        };
+
+        window.clearBackground = function() {
+            window.appState.settings.bgImage = '';
+            showToast("Imagem removida. Salve para aplicar.", "info");
+        };
+
+        window.saveSettings = function() {
+            window.appState.settings.blur = document.getElementById('blurSlider').value;
+            window.appState.settings.opacity = document.getElementById('opacitySlider').value;
+            if(typeof window.saveState === 'function') window.saveState();
+            applyVisualSettings();
+            renderKanban();
+            closeSettingsModal();
+            showToast("Configurações aplicadas.", "success");
+        };
+
+        window.applyVisualSettings = function() {
+            const bg = document.getElementById('app-background');
+            const overlay = document.getElementById('app-blur-overlay');
+            const s = window.appState.settings;
+            applyTheme();
+
+            if (s.bgImage) {
+                bg.style.backgroundImage = `url('${s.bgImage}')`;
+                overlay.style.backdropFilter = `blur(${s.blur}px)`;
+                overlay.style.webkitBackdropFilter = `blur(${s.blur}px)`;
+                overlay.style.backgroundColor = `rgba(15, 23, 42, 0.4)`;
+            } else {
+                bg.style.backgroundImage = 'none';
+                overlay.style.backdropFilter = 'none';
+                overlay.style.webkitBackdropFilter = 'none';
+                overlay.style.backgroundColor = 'transparent';
+            }
+        };
+
+        // --- ARCHIVED MODAL ---
+        window.openArchivedModal = function() {
+            renderArchivedList();
+            document.getElementById('archivedModal').classList.remove('hidden');
+        };
+        window.closeArchivedModal = function() {
+            document.getElementById('archivedModal').classList.add('hidden');
+        };
+
+        function renderArchivedList() {
+            const container = document.getElementById('archivedListContainer');
+            container.innerHTML = '';
+            const arch = window.appState.orders.filter(o => o.archived);
+            
+            if (arch.length === 0) {
+                container.innerHTML = `<div class="text-center py-10 text-slate-400 font-medium">Nenhum pedido arquivado.</div>`;
+                return;
+            }
+
+            arch.forEach(o => {
+                const div = document.createElement('div');
+                div.className = "bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex justify-between items-center";
+                div.innerHTML = `
+                    <div>
+                        <h4 class="font-bold text-slate-800 text-sm uppercase">${escapeHtml(o.client)} <span class="text-[10px] font-normal text-slate-500 bg-slate-100 px-1 rounded ml-1">${o.type}</span></h4>
+                        <p class="text-xs text-slate-500">${escapeHtml(o.tag)}</p>
+                    </div>
+                    <div class="flex gap-2 admin-only">
+                        <button onclick="closeArchivedModal();duplicateOrder('${o.id}')" title="Duplicar" class="bg-slate-100 text-slate-600 hover:bg-slate-200 px-3 py-1.5 rounded text-xs font-bold transition"><i class="fas fa-copy"></i></button>
+                        <button onclick="unarchiveOrder('${o.id}')" class="bg-brand-50 text-brand-600 hover:bg-brand-100 px-3 py-1.5 rounded text-xs font-bold transition">Desarquivar</button>
+                        <button onclick="deleteArchived('${o.id}')" class="bg-red-50 text-red-600 hover:bg-red-100 px-3 py-1.5 rounded text-xs font-bold transition">Excluir</button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        window.unarchiveOrder = function(id) {
+            const order = window.appState.orders.find(o => o.id === id);
+            if (order) { order.archived = false; if(typeof window.saveState === 'function') window.saveState(); renderArchivedList(); renderKanban(); showToast("Pedido restaurado ao quadro.", "info"); }
+        };
+
+        window.deleteArchived = function(id) {
+            if(confirm("Excluir pedido definitivamente?")) {
+                window.appState.orders = window.appState.orders.filter(o => o.id !== id);
+                if(typeof window.saveState === 'function') window.saveState(); renderArchivedList();
+            }
+        };
+
+        // --- PRINT A4 ---
+        window.printOrder = function(oId) {
+            const order = window.appState.orders.find(o => o.id === oId);
+            if (!order) return;
+
+            const sheet = document.getElementById('printableSheet');
+            
+            let html = `
+                <div style="padding: 20mm; font-family: Arial, sans-serif; color: #000; max-width: 210mm; margin: 0 auto;">
+                    <div style="border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px; text-align: center;">
+                        <h1 style="margin: 0; font-size: 24px; text-transform: uppercase; font-weight: bold;">ORDEM DE PRODUÇÃO</h1>
+                        <h2 style="margin: 5px 0 0 0; font-size: 18px; color: #444;">${escapeHtml(order.client)}</h2>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 25px; font-size: 14px;">
+                        <div>
+                            <p style="margin: 3px 0;"><strong>Lote/Ref:</strong> ${escapeHtml(order.tag)}</p>
+                            <p style="margin: 3px 0;"><strong>Tipo:</strong> ${order.type === 'barracao' ? 'Barracão' : 'Pedido Variado'}</p>
+                            <p style="margin: 3px 0;"><strong>Setor Atual:</strong> ${order.sector.toUpperCase()}</p>
+                            <p style="margin: 3px 0;"><strong>Status:</strong> ${statusLabel(order.status)}</p>
+                            <p style="margin: 3px 0;"><strong>Prazo:</strong> ${order.deadline ? fmtDate(order.deadline) : '—'}</p>
+                        </div>
+                        <div style="text-align: right;">
+                            <p style="margin: 3px 0;"><strong>Data de Emissão:</strong> ${new Date().toLocaleDateString('pt-BR')}</p>
+                        </div>
+                    </div>
+
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 14px;">
+                        <thead>
+                            <tr style="background-color: #f5f5f5;">
+                                <th style="border: 1px solid #000; padding: 10px; text-align: left;">Descrição da Peça</th>
+                                <th style="border: 1px solid #000; padding: 10px; text-align: center; width: 80px;">Qtd Total</th>
+                                <th style="border: 1px solid #000; padding: 10px; text-align: center; width: 100px;">Produzido</th>
+                                <th style="border: 1px solid #000; padding: 10px; text-align: center; width: 120px;">Visto QC</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            order.items.forEach(item => {
+                html += `
+                    <tr>
+                        <td style="border: 1px solid #000; padding: 10px;">${escapeHtml(item.name)}</td>
+                        <td style="border: 1px solid #000; padding: 10px; text-align: center; font-weight: bold;">${item.total}</td>
+                        <td style="border: 1px solid #000; padding: 10px; text-align: center;">${item.done}</td>
+                        <td style="border: 1px solid #000; padding: 10px;"></td>
+                    </tr>
+                `;
+            });
+
+            html += `
+                        </tbody>
+                    </table>
+
+                    ${order.notes ? `
+                        <div style="margin-bottom: 30px;">
+                            <h4 style="margin: 0 0 5px 0;">Observações:</h4>
+                            <div style="border: 1px solid #000; padding: 10px; font-size: 14px;">${escapeHtml(order.notes)}</div>
+                        </div>
+                    ` : ''}
+
+                    <div style="margin-top: 50px; display: flex; justify-content: space-between; font-size: 14px;">
+                        <div style="text-align: center; width: 45%;">
+                            <div style="border-bottom: 1px solid #000; height: 30px;"></div>
+                            <p style="margin-top: 5px;">Assinatura Operador</p>
+                        </div>
+                        <div style="text-align: center; width: 45%;">
+                            <div style="border-bottom: 1px solid #000; height: 30px;"></div>
+                            <p style="margin-top: 5px;">Visto Supervisão / Expedição</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            sheet.innerHTML = html;
+            setTimeout(() => window.print(), 100);
+        };
+
+        // --- UTILS & AUXILIARES ---
+        function statusLabel(id) { const c = COLUMNS.find(c => c.id === id); return c ? c.title : id; }
+        function fmtDate(iso) { const [y, m, d] = iso.split('-'); return d + '/' + m + '/' + y; }
+        function byDeadline(a, b) {
+            const x = a.deadline || '9999', y = b.deadline || '9999';
+            return x < y ? -1 : x > y ? 1 : 0;
+        }
+        function deadlineBadge(o) {
+            if (!o.deadline) return '';
+            const t = new Date(); t.setHours(0, 0, 0, 0);
+            const diff = Math.round((new Date(o.deadline + 'T00:00:00') - t) / 86400000);
+            const dm = o.deadline.split('-').reverse().slice(0, 2).join('/');
+            let cls = 'bdg-ok', txt = dm;
+            if (o.status !== 'pronto') {
+                if (diff < 0) { cls = 'bdg-late'; txt = 'Atrasado ' + (-diff) + 'd · ' + dm; }
+                else if (diff === 0) { cls = 'bdg-late'; txt = 'Hoje · ' + dm; }
+                else if (diff === 1) { cls = 'bdg-soon'; txt = 'Amanhã · ' + dm; }
+                else if (diff <= 3) { cls = 'bdg-soon'; txt = diff + ' dias · ' + dm; }
+            }
+            return `<span class="bdg ${cls}"><i class="fas fa-calendar-day"></i>${txt}</span>`;
+        }
+
+        window.duplicateOrder = function(oId) {
+            if (!window.appState.orders.find(x => x.id === oId)) return;
+            openOrderModal(oId);
+            document.getElementById('orderModalTitle').innerHTML = '<i class="fas fa-copy mr-2 text-brand-600"></i> Duplicar Pedido';
+            document.getElementById('formOrderId').value = '';
+            document.getElementById('btnDeleteOrder').classList.add('hidden');
+            document.getElementById('btnDuplicateOrder').classList.add('hidden');
+            document.getElementById('formStatus').value = 'fila';
+            document.getElementById('formCopies').value = 1;
+            document.getElementById('copiesRow').classList.remove('hidden');
+            document.querySelectorAll('#formItemsContainer .form-item-done').forEach(i => i.value = 0);
+            showToast("Ajuste o que mudar e salve.", "info");
+        };
+
+        const DEFAULT_ACCENT = '#0284c7';
+        function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+        function mixC(a, b, t) { return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * t).toString(16).padStart(2, '0')).join(''); }
+
+        window.applyTheme = function() {
+            const s = window.appState.settings, dark = s.theme === 'dark';
+            const accent = s.accent || DEFAULT_ACCENT, b = hexToRgb(accent), W = [255, 255, 255], K = [15, 23, 42];
+            let v;
+            if (!dark && accent === DEFAULT_ACCENT) v = { 50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1' };
+            else if (dark) v = { 50: mixC(b, K, .8), 100: mixC(b, K, .7), 200: mixC(b, K, .5), 500: mixC(b, W, .15), 600: mixC(b, W, .25), 700: mixC(b, W, .5) };
+            else v = { 50: mixC(b, W, .92), 100: mixC(b, W, .85), 200: mixC(b, W, .7), 500: mixC(b, W, .2), 600: accent, 700: mixC(b, K, .25) };
+            const st = document.documentElement.style;
+            Object.keys(v).forEach(k => st.setProperty('--brand-' + k, v[k]));
+            document.documentElement.classList.toggle('dark', dark);
+            document.documentElement.classList.toggle('has-accent', accent !== DEFAULT_ACCENT);
+            document.getElementById('themeIcon').className = 'fas ' + (dark ? 'fa-sun' : 'fa-moon');
+            document.getElementById('thLight').classList.toggle('on', !dark);
+            document.getElementById('thDark').classList.toggle('on', dark);
+            document.querySelectorAll('.sw').forEach(e => e.classList.toggle('on', e.dataset.c === accent));
+            document.getElementById('accentPicker').value = accent;
+        };
+        window.setTheme = function(t) { window.appState.settings.theme = t; if(typeof window.saveState === 'function') window.saveState(); applyTheme(); };
+        window.toggleTheme = function() { setTheme(window.appState.settings.theme === 'dark' ? 'light' : 'dark'); };
+        window.setAccent = function(c) { window.appState.settings.accent = c; if(typeof window.saveState === 'function') window.saveState(); applyTheme(); };
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/[&<>"']/g, function(m) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
+            });
+        }
+
+        window.showToast = function(msg, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const div = document.createElement('div');
+            
+            let colorClass = 'bg-slate-800 text-white border-slate-700';
+            let icon = 'fa-info-circle text-blue-400';
+            
+            if (type === 'success') { colorClass = 'bg-slate-800 text-white border-emerald-500'; icon = 'fa-check-circle text-emerald-400'; }
+            if (type === 'warning') { colorClass = 'bg-amber-100 text-amber-800 border-amber-300'; icon = 'fa-exclamation-triangle text-amber-600'; }
+
+            div.className = `flex items-center gap-3 px-4 py-3 rounded-lg shadow-xl border font-medium text-sm transition-all duration-300 transform translate-y-10 opacity-0 ${colorClass}`;
+            div.innerHTML = `<i class="fas ${icon}"></i> <span>${msg}</span>`;
+            
+            container.appendChild(div);
+            
+            requestAnimationFrame(() => {
+                div.classList.remove('translate-y-10', 'opacity-0');
+            });
+
+            setTimeout(() => {
+                div.classList.add('translate-y-10', 'opacity-0');
+                setTimeout(() => div.remove(), 300);
+            }, 3000);
+        };
+    </script>
+</body>
+</html>
